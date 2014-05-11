@@ -339,15 +339,19 @@ var runWebAppServer = function () {
       res.end();
     };
 
-    if (pathname === "/meteor_runtime_config.js" &&
-        ! WebAppInternals.inlineScriptsAllowed()) {
-      serveStaticJs("__meteor_runtime_config__ = " +
-                    JSON.stringify(__meteor_runtime_config__) + ";");
-      return;
-    } else if (pathname === "/meteor_reload_safetybelt.js" &&
-               ! WebAppInternals.inlineScriptsAllowed()) {
-      serveStaticJs(RELOAD_SAFETYBELT);
-      return;
+    if (! WebAppInternals.inlineScriptsAllowed()) {
+      if (pathname === "/meteor_runtime_config.js") {
+        serveStaticJs("__meteor_runtime_config__ = " +
+                      JSON.stringify(__meteor_runtime_config__) + ";");
+        return;
+      } else if (pathname === "/meteor_reload_safetybelt.js") {
+        serveStaticJs(RELOAD_SAFETYBELT);
+        return;
+      } else if (pathname === "/meteor_layers.js") {
+        serveStaticJs("layers = " +
+                      JSON.stringify(boilerplateBaseData.layers) + ";");
+        return;
+      }
     }
 
     if (!_.has(staticFiles, pathname)) {
@@ -607,6 +611,7 @@ var runWebAppServer = function () {
       js: [],
       head: '',
       body: '',
+      layers: [],
       inlineScriptsAllowed: WebAppInternals.inlineScriptsAllowed(),
       meteorRuntimeConfig: JSON.stringify(__meteor_runtime_config__),
       reloadSafetyBelt: RELOAD_SAFETYBELT,
@@ -620,7 +625,13 @@ var runWebAppServer = function () {
         boilerplateBaseData.css.push({url: item.url});
       }
       if (item.type === 'js' && item.where === 'client') {
-        boilerplateBaseData.js.push({url: item.url});
+        if (!item.layer) {
+          boilerplateBaseData.js.push({url: item.url});
+        } else {
+          boilerplateBaseData.layers.push({
+            name: item.layer, path: item.url
+          });
+        }
       }
       if (item.type === 'head') {
         boilerplateBaseData.head = fs.readFileSync(
@@ -642,7 +653,11 @@ var runWebAppServer = function () {
 
     boilerplateTemplate = UI.Component.extend({
       kind: "MainPage",
-      render: boilerplateRender
+      render: boilerplateRender,
+      __helperHost: true,
+      toJSON: function (value) {
+        return JSON.stringify(value, undefined, 2);
+      },
     });
 
     // only start listening after all the startup code has run.

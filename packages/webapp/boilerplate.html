@@ -11,8 +11,12 @@
 {{/each}}
 {{#if inlineScriptsAllowed}}
 <script type='text/javascript'>{{{reloadSafetyBelt}}}</script>
+<script type='text/javascript'>
+layers = {{toJSON layers}};
+</script>
 {{else}}
 <script type='text/javascript' src='{{rootUrlPathPrefix}}/meteor_reload_safetybelt.js'></script>
+<script type='text/javascript' src='{{rootUrlPathPrefix}}/meteor_layers.js'></script>
 {{/if}}
 {{{head}}}
 </head>

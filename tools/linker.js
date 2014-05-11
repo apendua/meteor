@@ -25,12 +25,14 @@ var Module = function (options) {
 
   // files in the module. array of File
   self.files = [];
+  self.layers = {};
 
   // options
   self.declaredExports = options.declaredExports;
   self.useGlobalNamespace = options.useGlobalNamespace;
   self.combinedServePath = options.combinedServePath;
   self.importStubServePath = options.importStubServePath;
+  self.layerServePaths = options.layerServePaths;
   self.jsAnalyze = options.jsAnalyze;
 };
 
@@ -39,16 +41,26 @@ _.extend(Module.prototype, {
   // servePath: the path where it would prefer to be served if possible
   addFile: function (inputFile) {
     var self = this;
-    self.files.push(new File(inputFile, self));
+    var file = new File(inputFile, self);
+    self.files.push(file);
+    // add to the corresponding layer
+    if (self.layers[inputFile.layer] === undefined) {
+      self.layers[inputFile.layer] = [];
+    }
+    self.layers[inputFile.layer].push(file);
   },
 
 
-  maxLineLength: function (ignoreOver) {
+  maxLineLength: function (ignoreOver, layer) {
     var self = this;
-
+    var files = self.files;
+    if (arguments.length >= 2) {
+      files = self.layers[layer];
+    }
     var maxInFile = [];
-    _.each(self.files, function (file) {
+    _.each(files, function (file) {
       var m = 0;
+      if (file.layer !== layer) return;
       _.each(file.source.split('\n'), function (line) {
         if (line.length <= ignoreOver && line.length > m)
           m = line.length;
@@ -71,9 +83,9 @@ _.extend(Module.prototype, {
       return self.declaredExports;
     }
 
-    // Find all global references in any files
+    // Find all global references in files which does not belong to any layer
     var assignedVariables = [];
-    _.each(self.files, function (file) {
+    _.each(self.layers[undefined], function (file) {
       assignedVariables = assignedVariables.concat(
         file.computeAssignedVariables());
     });
@@ -82,10 +94,47 @@ _.extend(Module.prototype, {
     return _.isEmpty(assignedVariables) ? undefined : assignedVariables;
   },
 
+  getPrelinkedFilesForLayer: function (layer) {
+    var self = this;
+
+    // Find the maximum line length.
+    var sourceWidth = _.max([68, self.maxLineLength(120 - 2, layer)]);
+    var combinedServePath = self.combinedServePath;
+
+    // Prologue
+    var chunks = [];
+
+    if (layer) {
+      // TODO: this is probbly not a good idea
+      //combinedServePath = combinedServePath;
+    }
+
+    // Emit each file
+    _.each(self.layers[layer], function (file) {
+      if (!_.isEmpty(chunks))
+        chunks.push("\n\n\n\n\n\n");
+      chunks.push(file.getPrelinkedOutput({ sourceWidth: sourceWidth }));
+    });
+
+    var node = new sourcemap.SourceNode(null, null, null, chunks);
+
+    var results = node.toStringWithSourceMap({
+      file: combinedServePath
+    }); // results has 'code' and 'map' attributes
+
+    return {
+      source: results.code,
+      servePath: self.layerServePaths[layer],
+      sourceMap: results.map.toString(),
+      layer: layer
+    };
+  },
+
   // Output is a list of objects with keys 'source', 'servePath', 'sourceMap',
   // 'sourcePath'
   getPrelinkedFiles: function () {
     var self = this;
+    var layers = [];
 
     // If there are no files *and* we are a no-exports-at-all slice (eg a test
     // slice), then generate no prelink output.
@@ -97,11 +146,20 @@ _.extend(Module.prototype, {
     if (_.isEmpty(self.files) && !self.declaredExports)
       return [];
 
+      
+    // Do all the named layers first.
+    _.each(_.keys(self.layers), function (layerName) {
+      if (layerName !== 'undefined') {
+        layers.push(self.getPrelinkedFilesForLayer(layerName));
+      }
+    });
+
     // If we don't want to create a separate scope for this module,
     // then our job is much simpler. And we can get away with
     // preserving the line numbers.
     if (self.useGlobalNamespace) {
-      return _.map(self.files, function (file) {
+
+      return _.map(self.layers[undefined], function (file) {
         var node = file.getPrelinkedOutput({ preserveLineNumbers: true });
         var results = node.toStringWithSourceMap({
           file: file.servePath
@@ -117,9 +175,9 @@ _.extend(Module.prototype, {
         return {
           source: results.code,
           servePath: file.servePath,
-          sourceMap: sourceMap
+          sourceMap: sourceMap,
         };
-      });
+      }).concat(layers);
     }
 
     // Otherwise..
@@ -131,7 +189,7 @@ _.extend(Module.prototype, {
     var chunks = [];
 
     // Emit each file
-    _.each(self.files, function (file) {
+    _.each(self.layers[undefined], function (file) {
       if (!_.isEmpty(chunks))
         chunks.push("\n\n\n\n\n\n");
       chunks.push(file.getPrelinkedOutput({ sourceWidth: sourceWidth }));
@@ -146,7 +204,7 @@ _.extend(Module.prototype, {
       source: results.code,
       servePath: self.combinedServePath,
       sourceMap: results.map.toString()
-    }];
+    }].concat(layers);
   }
 });
 
@@ -220,6 +278,9 @@ var File = function (inputFile, module) {
 
   // If true, don't wrap this individual file in a closure.
   self.bare = !!inputFile.bare;
+
+  // If set, the file won't be loaded on startup
+  self.layer = inputFile.layer;
 
   // A source map (generated by something like CoffeeScript) for the input file.
   self.sourceMap = inputFile.sourceMap;
@@ -494,6 +555,7 @@ var prelink = function (options) {
     useGlobalNamespace: options.useGlobalNamespace,
     importStubServePath: options.importStubServePath,
     combinedServePath: options.combinedServePath,
+    layerServePaths: options.layerServePaths,
     jsAnalyze: options.jsAnalyze
   });
 
@@ -561,7 +623,7 @@ var link = function (options) {
     return ret.concat(options.prelinkFiles);
   }
 
-  var header = getHeader({
+  var moduleHeader = getHeader({
     imports: options.imports,
     packageVariables: options.packageVariables
   });
@@ -573,13 +635,27 @@ var link = function (options) {
     }), 'name');
   }
 
-  var footer = getFooter({
+  var layerHeader = getLayerHeader({
+    name: options.name,
+    imports: options.imports,
+    packageVariables: options.packageVariables,
+    exported: exported
+  });
+
+  var layerFooter = getLayerFooter({
+    exported: exported,
+    name: options.name
+  });
+
+  var moduleFooter = getFooter({
     exported: exported,
     name: options.name
   });
 
   var ret = [];
   _.each(options.prelinkFiles, function (file) {
+    var header = file.layer ? layerHeader : moduleHeader;
+    var footer = file.layer ? layerFooter : moduleFooter;
     if (file.sourceMap) {
       if (options.includeSourceMapInstructions)
         header = SOURCE_MAP_INSTRUCTIONS_COMMENT + "\n\n" + header;
@@ -600,12 +676,14 @@ var link = function (options) {
       ret.push({
         source: header + file.source + footer,
         servePath: file.servePath,
-        sourceMap: JSON.stringify(sourceMapJson)
+        sourceMap: JSON.stringify(sourceMapJson),
+        layer: file.layer
       });
     } else {
       ret.push({
         source: header + file.source + footer,
-        servePath: file.servePath
+        servePath: file.servePath,
+        layer: file.layer
       });
     }
   });
@@ -622,6 +700,19 @@ var getHeader = function (options) {
     chunks.push("var " + _.pluck(options.packageVariables, 'name').join(', ') +
                 ";\n\n");
   }
+  return chunks.join('');
+};
+
+var getLayerHeader = function (options) {
+  var chunks = [];
+  chunks.push(getHeader(options));
+  if (options.name && options.packageVariables) {
+    chunks.push("/* Synchronize package-exports */\n");
+    _.each(options.exported, function (symbol) {
+      chunks.push(symbol +  " = " + packageDot(options.name) + "." + symbol + ";\n");
+    });
+  }
+  chunks.push("\n");
   return chunks.join('');
 };
 
@@ -677,6 +768,28 @@ var getFooter = function (options) {
   }
 
   chunks.push("\n})();\n");
+  return chunks.join('');
+};
+
+var getLayerFooter = function (options) {
+  var chunks = [];
+
+  if (options.name && options.exported) {
+    chunks.push("\n/* Update package-exports */\n");
+    _.each(options.exported, function (symbol) {
+      chunks.push(packageDot(options.name) + "." + symbol + " = " + symbol + ";\n");
+    });
+  }
+
+  chunks.push("\n})();\n");
+
+  if (options.name && options.exported) {
+    chunks.push("\n/* Update global variables */\n");
+    _.each(options.exported, function (symbol) {
+      chunks.push(symbol +  " = " + packageDot(options.name) + "." + symbol + ";\n");
+    });
+  }
+
   return chunks.join('');
 };
 

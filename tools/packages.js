@@ -44,6 +44,15 @@ var parseSpec = function (spec) {
   return ret;
 };
 
+var parseLayerName = function (relPath) {
+  var parts = relPath.split(path.sep);
+  var index = _.indexOf(parts, 'layers');
+  if (index < 0 || index === parts.length - 1)
+    return;
+  var name = parts[index+1];
+  return name.slice(0, name.length - path.extname(name).length);
+};
+
 // Returns a sort comparator to order files into load order.
 // templateExtensions should be a list of extensions like 'html'
 // which should be loaded before other extensions.
@@ -246,6 +255,10 @@ _.extend(Slice.prototype, {
 
     var resources = [];
     var js = [];
+
+    var pkgPrefix = function (name) {
+      return name && self.pkg.name ? self.pkg.name + "/" + name : name;
+    }
 
     // Preemptively check to make sure that each of the packages we
     // reference actually exist. If we find a package that doesn't
@@ -469,12 +482,14 @@ _.extend(Slice.prototype, {
             throw new Error("'sourcePath' option must be supplied to addJavaScript. Consider passing inputPath.");
           if (options.bare && ! archinfo.matches(self.arch, "browser"))
             throw new Error("'bare' option may only be used for browser targets");
+          // TODO: layer can be only used on browser targets
           js.push({
             source: options.data,
             sourcePath: options.sourcePath,
             servePath: path.join(self.pkg.serveRoot, options.path),
             bare: !!options.bare,
-            sourceMap: options.sourceMap
+            sourceMap: options.sourceMap,
+            layer: (_.has(options, 'layer') ? pkgPrefix(options.layer) : pkgPrefix(compileStep.fileOptions.layer)),
           });
         },
         addAsset: function (options) {
@@ -516,12 +531,23 @@ _.extend(Slice.prototype, {
       })["js-analyze"].JSAnalyze;
     }
 
+    var sliceSuffix = (self.sliceName === "main" ? "" : (":" + self.sliceName));
+    var layerServePaths = {};
+
+    _.each(js, function (item) {
+      if (item.layer) {
+        // TODO: do we really want to use sliceSuffix of this form? is it amd complaint?
+        layerServePaths[item.layer] = isApp ?
+          "/client/layers/" + item.layer + ".js" :
+          "/packages/" + self.pkg.name + "/" + item.layer + sliceSuffix + ".js";
+      }
+    });
+
     var results = linker.prelink({
       inputFiles: js,
       useGlobalNamespace: isApp,
-      combinedServePath: isApp ? null :
-        "/packages/" + self.pkg.name +
-        (self.sliceName === "main" ? "" : (":" + self.sliceName)) + ".js",
+      combinedServePath: isApp ? null : "/packages/" + self.pkg.name + sliceSuffix + ".js",
+      layerServePaths: layerServePaths,
       name: self.pkg.name || null,
       declaredExports: _.pluck(self.declaredExports, 'name'),
       jsAnalyze: jsAnalyze
@@ -636,7 +662,8 @@ _.extend(Slice.prototype, {
         type: "js",
         data: new Buffer(file.source, 'utf8'), // XXX encoding
         servePath: file.servePath,
-        sourceMap: file.sourceMap
+        sourceMap: file.sourceMap,
+        layer: file.layer
       };
     });
 
@@ -741,7 +768,8 @@ _.extend(Slice.prototype, {
             sourcePath: compileStep.inputPath,
             // XXX eventually get rid of backward-compatibility "raw" name
             // XXX COMPAT WITH 0.6.4
-            bare: compileStep.fileOptions.bare || compileStep.fileOptions.raw
+            bare: compileStep.fileOptions.bare || compileStep.fileOptions.raw,
+            layer: compileStep.fileOptions.layer
           });
         },
         isTemplate: false
@@ -1837,11 +1865,20 @@ _.extend(Package.prototype, {
 
           // Special case: on the client, JavaScript files in a
           // `client/compatibility` directory don't get wrapped in a closure.
+          // TODO (apendua) optimize this
           if (sliceName === "client" && relPath.match(/\.js$/)) {
             var clientCompatSubstr =
                   path.sep + 'client' + path.sep + 'compatibility' + path.sep;
-            if ((path.sep + relPath).indexOf(clientCompatSubstr) !== -1)
+            if ((path.sep + relPath).indexOf(clientCompatSubstr) !== -1) {
               sourceObj.fileOptions = {bare: true};
+            }
+          }
+          if (sliceName === "client") {
+            var clientLayersSubstr = path.sep + 'client' + path.sep + 'layers' + path.sep;
+            if ((path.sep + relPath).indexOf(clientLayersSubstr) !== -1) {
+              // TODO: probably, we should add some prefix to the module name
+              sourceObj.fileOptions = {layer: parseLayerName(relPath)};
+            }
           }
           return sourceObj;
         });
@@ -2068,6 +2105,9 @@ _.extend(Package.prototype, {
             rejectBadPath(resource.sourceMap);
             prelinkFile.sourceMap = fs.readFileSync(
               path.join(sliceBasePath, resource.sourceMap), 'utf8');
+          }
+          if (resource.layer) {
+            prelinkFile.layer = resource.layer;
           }
           slice.prelinkFiles.push(prelinkFile);
         } else if (_.contains(["head", "body", "css", "js", "asset"],
@@ -2300,7 +2340,8 @@ _.extend(Package.prototype, {
               { data: data }),
             length: data.length,
             offset: 0,
-            servePath: file.servePath || undefined
+            servePath: file.servePath || undefined,
+            layer: file.layer
           };
 
           if (file.sourceMap) {
