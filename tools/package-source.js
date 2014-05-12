@@ -984,6 +984,7 @@ _.extend(PackageSource.prototype, {
     self.serveRoot = path.sep;
 
     _.each(["client", "server"], function (archName) {
+      var ignore = project.getIgnoreFiles(appDir);
       // Determine used packages
       var names = project.getPackages(appDir);
       var arch = archName === "server" ? "os" : "browser";
@@ -999,7 +1000,8 @@ _.extend(PackageSource.prototype, {
       // Watch control files for changes
       // XXX this read has a race with the actual reads that are used
       _.each([path.join(appDir, '.meteor', 'packages'),
-              path.join(appDir, '.meteor', 'release')], function (p) {
+              path.join(appDir, '.meteor', 'release'),
+              path.join(appDir, '.meteor', 'ignore')], function (p) {
                 watch.readAndWatchFile(sourceArch.watchSet, p);
               });
 
@@ -1011,7 +1013,7 @@ _.extend(PackageSource.prototype, {
             return new RegExp('\\.' + quotemeta(ext) + '$');
           }
         );
-        var sourceExclude = [/^\./].concat(ignoreFiles);
+        var sourceExclude = [/^\./].concat(ignoreFiles).concat(ignore);
 
         // Wrapper around watch.readAndWatchDirectory which takes in and returns
         // sourceRoot-relative directories.
