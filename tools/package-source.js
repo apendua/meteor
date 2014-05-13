@@ -986,7 +986,10 @@ _.extend(PackageSource.prototype, {
     _.each(["client", "server"], function (archName) {
       // Determine used packages
       var names = project.getPackages(appDir);
+      var ignore = project.getIgnoredFiles(appDir);
       var arch = archName === "server" ? "os" : "browser";
+
+      console.log(ignore);
 
       // Create build
       var sourceArch = new SourceArch(self, {
@@ -999,7 +1002,8 @@ _.extend(PackageSource.prototype, {
       // Watch control files for changes
       // XXX this read has a race with the actual reads that are used
       _.each([path.join(appDir, '.meteor', 'packages'),
-              path.join(appDir, '.meteor', 'release')], function (p) {
+              path.join(appDir, '.meteor', 'release'),
+              path.join(appDir, '.meteor', 'ignore')], function (p) {
                 watch.readAndWatchFile(sourceArch.watchSet, p);
               });
 
@@ -1102,7 +1106,6 @@ _.extend(PackageSource.prototype, {
         // Convert into relPath/fileOptions objects.
         sources = _.map(sources, function (relPath) {
           var sourceObj = {relPath: relPath};
-
           // Special case: on the client, JavaScript files in a
           // `client/compatibility` directory don't get wrapped in a closure.
           if (archName === "client" && relPath.match(/\.js$/)) {

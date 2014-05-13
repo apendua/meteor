@@ -35,7 +35,6 @@ var getVersionsLines = function (appDir) {
   return fs.existsSync(versionsFile) ? getLines(versionsFile) : [];
 };
 
-
 var trimLine = function (line) {
   var match = line.match(/^([^#]*)#/);
   if (match)
@@ -49,18 +48,27 @@ var writePackages = function (appDir, lines) {
                    lines.join('\n') + '\n', 'utf8');
 };
 
-// Package names used by this project.
-project.getPackages = function (appDir) {
+var trimLines = function (lines) {
   var ret = [];
 
-  // read from .meteor/packages
-  _.each(getPackagesLines(appDir), function (line) {
+  _.each(lines, function (line) {
     line = trimLine(line);
     if (line !== '')
       ret.push(line);
   });
 
   return ret;
+};
+
+// Package names used by this project.
+project.getPackages = function (appDir) {
+  // read from .meteor/packages
+  return trimLines(getPackagesLines(appDir));
+};
+
+project.getIgnoredFiles = function (appDir) {
+  // read from .meteor/packages
+  return trimLines(getLines(path.join(appDir, '.meteor', 'ignore')));
 };
 
 // Return an array of form [{packageName: foo, versionConstraint: 1.0}]

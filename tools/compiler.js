@@ -289,7 +289,8 @@ var compileBuild = function (unipackage, inputSourceArch, packageLoader,
       sourcePath: compileStep.inputPath,
       // XXX eventually get rid of backward-compatibility "raw" name
       // XXX COMPAT WITH 0.6.4
-      bare: compileStep.fileOptions.bare || compileStep.fileOptions.raw
+      bare: compileStep.fileOptions.bare || compileStep.fileOptions.raw,
+      ignore: !!compileStep.fileOptions.ignore
     });
   };
 
